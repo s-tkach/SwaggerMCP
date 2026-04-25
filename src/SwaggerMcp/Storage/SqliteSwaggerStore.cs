@@ -3,6 +3,7 @@ using Dapper;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using System.Runtime.InteropServices;
 using SwaggerMcp.Configuration;
 using SwaggerMcp.Models;
 
@@ -304,10 +305,22 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
 
     private async Task<bool> TryCreateVectorTableAsync(SqliteConnection connection)
     {
+        var extensionPath = ResolveVecExtensionPath();
+        if (string.IsNullOrWhiteSpace(extensionPath))
+        {
+            await connection.ExecuteAsync("""
+                CREATE TABLE IF NOT EXISTS endpoints_vec (
+                  endpoint_id INTEGER PRIMARY KEY REFERENCES endpoints(id) ON DELETE CASCADE,
+                  embedding TEXT NOT NULL
+                );
+                """);
+            return false;
+        }
+
         try
         {
             connection.EnableExtensions(true);
-            connection.LoadExtension(ResolveVecExtensionPath());
+            connection.LoadExtension(extensionPath);
             await connection.ExecuteAsync("""
                 CREATE VIRTUAL TABLE IF NOT EXISTS endpoints_vec USING vec0(
                   endpoint_id INTEGER PRIMARY KEY,
@@ -318,7 +331,7 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "sqlite-vec extension unavailable; using a compatible local vector table fallback.");
+            _logger.LogWarning(ex, "sqlite-vec extension load failed from path '{ExtensionPath}'; using a compatible local vector table fallback.", extensionPath);
             await connection.ExecuteAsync("""
                 CREATE TABLE IF NOT EXISTS endpoints_vec (
                   endpoint_id INTEGER PRIMARY KEY REFERENCES endpoints(id) ON DELETE CASCADE,
@@ -329,7 +342,7 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
         }
     }
 
-    private static string ResolveVecExtensionPath()
+    private static string? ResolveVecExtensionPath()
     {
         var configured = Environment.GetEnvironmentVariable("SQLITE_VEC_EXTENSION_PATH");
         if (!string.IsNullOrWhiteSpace(configured))
@@ -337,8 +350,28 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
             return configured;
         }
 
-        var appLocal = Path.Combine(AppContext.BaseDirectory, "vec0.so");
-        return File.Exists(appLocal) ? appLocal : "vec0";
+        var extension = RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
+            ? ".dylib"
+            : RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+                ? ".dll"
+                : ".so";
+
+        var candidates = new[]
+        {
+            Path.Combine(AppContext.BaseDirectory, $"vec0{extension}"),
+            Path.Combine(AppContext.BaseDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, "native", $"vec0{extension}"),
+            Path.Combine(AppContext.BaseDirectory, "native", $"vec0{extension}")
+        };
+
+        foreach (var candidate in candidates)
+        {
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     private static IReadOnlyList<string> DeserializeTags(string json) =>
