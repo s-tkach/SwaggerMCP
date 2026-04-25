@@ -47,7 +47,7 @@ The Docker image includes:
 
 ## Run with Docker Compose
 
-Create `${HOME}/Documents/swagger-mcp/appsettings.json` (or update the path in `docker-compose.yml`), then run:
+Create `/Users/<your-user>/Documents/swagger-mcp/appsettings.json` (or update the path in `docker-compose.yml`), then run:
 
 ```bash
 docker compose up -d
@@ -72,8 +72,8 @@ Use a user-level or workspace MCP config:
       "command": "docker",
       "args": [
         "run", "--rm", "-i",
-        "-v", "{HOME}/Documents/swagger-mcp/appsettings.json:/app/appsettings.json:ro",
-        "-v", "/abs/path/data:/app/data",
+        "-v", "/Users/<your-user>/Documents/swagger-mcp/appsettings.json:/app/appsettings.json:ro",
+        "-v", "/Users/<your-user>/Documents/swagger-mcp/data:/app/data",
         "swagger-mcp:latest"
       ]
     }
@@ -92,8 +92,8 @@ Add this server to `claude_desktop_config.json`:
       "command": "docker",
       "args": [
         "run", "--rm", "-i",
-        "-v", "{HOME}/Documents/swagger-mcp/appsettings.json:/app/appsettings.json:ro",
-        "-v", "/abs/path/data:/app/data",
+        "-v", "/Users/<your-user>/Documents/swagger-mcp/appsettings.json:/app/appsettings.json:ro",
+        "-v", "/Users/<your-user>/Documents/swagger-mcp/data:/app/data",
         "swagger-mcp:latest"
       ]
     }
