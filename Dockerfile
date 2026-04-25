@@ -29,7 +29,7 @@ RUN apt-get update \
        esac \
     && curl -fsSL "https://github.com/asg017/sqlite-vec/releases/download/v${SQLITE_VEC_VERSION}/sqlite-vec-${SQLITE_VEC_VERSION}-loadable-linux-${SQLITE_VEC_ARCH}.tar.gz" \
        | tar -xz -C /app vec0.so \
-    && apt-get purge -y --auto-remove curl tar \
+    && apt-get purge -y --auto-remove curl \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /out ./
