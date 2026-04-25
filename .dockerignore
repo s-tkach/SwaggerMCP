@@ -1,0 +1,9 @@
+**/bin/
+**/obj/
+.dotnet/
+data/
+TestResults/
+coverage/
+.git/
+.vs/
+.vscode/
