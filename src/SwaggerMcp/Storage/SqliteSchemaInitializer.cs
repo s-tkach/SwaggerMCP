@@ -7,6 +7,9 @@ namespace SwaggerMcp.Storage;
 
 public sealed class SqliteSchemaInitializer(ILogger<SqliteSchemaInitializer> logger)
 {
+    public const string SqliteVecTableName = "endpoints_vec";
+    public const string JsonFallbackTableName = "endpoints_vec_json";
+
     private string? _extensionPath;
 
     public async Task<SqliteVectorMode> InitializeAsync(SqliteConnection connection)
@@ -68,10 +71,10 @@ public sealed class SqliteSchemaInitializer(ILogger<SqliteSchemaInitializer> log
         try
         {
             LoadVectorExtension(connection);
-            var existingSql = await GetVectorTableSqlAsync(connection);
+            var existingSql = await GetTableSqlAsync(connection, SqliteVecTableName);
             if (existingSql is not null && !existingSql.Contains("USING vec0", StringComparison.OrdinalIgnoreCase))
             {
-                await connection.ExecuteAsync("DROP TABLE endpoints_vec;");
+                await connection.ExecuteAsync($"DROP TABLE {SqliteVecTableName};");
             }
 
             await connection.ExecuteAsync("""
@@ -91,23 +94,36 @@ public sealed class SqliteSchemaInitializer(ILogger<SqliteSchemaInitializer> log
 
     private static async Task<SqliteVectorMode> CreateJsonFallbackTableAsync(SqliteConnection connection)
     {
-        var existingSql = await GetVectorTableSqlAsync(connection);
-        if (existingSql is not null && existingSql.Contains("USING vec0", StringComparison.OrdinalIgnoreCase))
-        {
-            await connection.ExecuteAsync("DROP TABLE endpoints_vec;");
-        }
-
         await connection.ExecuteAsync("""
-            CREATE TABLE IF NOT EXISTS endpoints_vec (
+            CREATE TABLE IF NOT EXISTS endpoints_vec_json (
               endpoint_id INTEGER PRIMARY KEY REFERENCES endpoints(id) ON DELETE CASCADE,
               embedding TEXT NOT NULL
             );
             """);
+
+        await MigrateLegacyJsonFallbackTableAsync(connection);
         return SqliteVectorMode.JsonFallback;
     }
 
-    private static Task<string?> GetVectorTableSqlAsync(SqliteConnection connection) =>
-        connection.ExecuteScalarAsync<string?>("SELECT sql FROM sqlite_master WHERE name = 'endpoints_vec';");
+    private static async Task MigrateLegacyJsonFallbackTableAsync(SqliteConnection connection)
+    {
+        var existingSql = await GetTableSqlAsync(connection, SqliteVecTableName);
+        if (existingSql is null || existingSql.Contains("USING vec0", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        await connection.ExecuteAsync($"""
+            INSERT OR IGNORE INTO {JsonFallbackTableName} (endpoint_id, embedding)
+            SELECT endpoint_id, embedding
+            FROM {SqliteVecTableName};
+
+            DROP TABLE {SqliteVecTableName};
+            """);
+    }
+
+    private static Task<string?> GetTableSqlAsync(SqliteConnection connection, string tableName) =>
+        connection.ExecuteScalarAsync<string?>("SELECT sql FROM sqlite_master WHERE name = @TableName;", new { TableName = tableName });
 
     private static string? ResolveVecExtensionPath()
     {

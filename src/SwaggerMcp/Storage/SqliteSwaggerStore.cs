@@ -270,6 +270,22 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
                     );
                     """, new { ApiId = apiId, RemovedKeysJson = removedKeysJson }, transaction);
             }
+            else
+            {
+                await connection.ExecuteAsync($"""
+                    WITH removed(verb, path) AS (
+                      SELECT json_extract(value, '$.verb'), json_extract(value, '$.path')
+                      FROM json_each(@RemovedKeysJson)
+                    )
+                    DELETE FROM {SqliteSchemaInitializer.JsonFallbackTableName}
+                    WHERE endpoint_id IN (
+                      SELECT e.id
+                      FROM endpoints e
+                      JOIN removed r ON r.verb = e.verb AND r.path = e.path
+                      WHERE e.api_id = @ApiId
+                    );
+                    """, new { ApiId = apiId, RemovedKeysJson = removedKeysJson }, transaction);
+            }
 
             await connection.ExecuteAsync(
                 """

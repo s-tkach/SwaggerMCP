@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Data.Sqlite;
 using SwaggerMcp.Configuration;
 using SwaggerMcp.Indexing;
 using SwaggerMcp.Models;
@@ -98,6 +99,25 @@ public sealed class SqliteSwaggerStoreTests
         Assert.Equal("/pets", endpoint.Path);
     }
 
+    [Fact]
+    public async Task Initialize_UsesJsonFallbackWhenExistingVecTableCannotLoad()
+    {
+        await using var database = TempSqliteDatabase.Create();
+        await CreateUnavailableVecTableEntryAsync(database.FilePath);
+        var store = CreateStore(database.Options);
+
+        await store.InitializeAsync();
+
+        await using var connection = new SqliteConnection(CreateConnectionString(database.FilePath));
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT sql FROM sqlite_master WHERE name = @TableName;";
+        command.Parameters.AddWithValue("@TableName", SqliteSchemaInitializer.JsonFallbackTableName);
+
+        var fallbackSql = Assert.IsType<string>(await command.ExecuteScalarAsync());
+        Assert.Contains("CREATE TABLE", fallbackSql, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static SqliteSwaggerStore CreateStore(IOptions<SwaggerMcpOptions> options) =>
         new(
             options,
@@ -105,6 +125,25 @@ public sealed class SqliteSwaggerStoreTests
             new SqliteVectorSearch());
 
     private static OpenApiChunker CreateChunker() => new(new SchemaSummarizer());
+
+    private static async Task CreateUnavailableVecTableEntryAsync(string databasePath)
+    {
+        await using var connection = new SqliteConnection(CreateConnectionString(databasePath));
+        await connection.OpenAsync();
+        await using var command = connection.CreateCommand();
+        command.CommandText = """
+            PRAGMA writable_schema = ON;
+
+            INSERT INTO sqlite_master (type, name, tbl_name, rootpage, sql)
+            VALUES ('table', 'endpoints_vec', 'endpoints_vec', 0, 'CREATE VIRTUAL TABLE endpoints_vec USING vec0(embedding FLOAT[384])');
+
+            PRAGMA writable_schema = OFF;
+            """;
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private static string CreateConnectionString(string databasePath) =>
+        new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString();
 
     private static EndpointChunk CreateEndpoint(string path, string tag) =>
         new(

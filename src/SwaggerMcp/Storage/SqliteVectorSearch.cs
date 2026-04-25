@@ -22,8 +22,8 @@ public sealed class SqliteVectorSearch
                 INSERT INTO endpoints_vec (rowid, embedding)
                 VALUES (@EndpointId, @Embedding);
                 """, new { EndpointId = endpointId, Embedding = SerializeVector(embedding) }, transaction)
-            : connection.ExecuteAsync("""
-                INSERT OR REPLACE INTO endpoints_vec (endpoint_id, embedding)
+            : connection.ExecuteAsync($"""
+                INSERT OR REPLACE INTO {SqliteSchemaInitializer.JsonFallbackTableName} (endpoint_id, embedding)
                 VALUES (@EndpointId, @Embedding);
                 """, new { EndpointId = endpointId, Embedding = SerializeVector(embedding) }, transaction);
     }
@@ -36,7 +36,7 @@ public sealed class SqliteVectorSearch
     {
         return mode == SqliteVectorMode.SqliteVec
             ? connection.ExecuteAsync("DELETE FROM endpoints_vec WHERE rowid = @EndpointId;", new { EndpointId = endpointId }, transaction)
-            : connection.ExecuteAsync("DELETE FROM endpoints_vec WHERE endpoint_id = @EndpointId;", new { EndpointId = endpointId }, transaction);
+            : connection.ExecuteAsync($"DELETE FROM {SqliteSchemaInitializer.JsonFallbackTableName} WHERE endpoint_id = @EndpointId;", new { EndpointId = endpointId }, transaction);
     }
 
     public async Task<IReadOnlyList<EndpointSearchResult>> SearchAsync(
@@ -96,7 +96,7 @@ public sealed class SqliteVectorSearch
         string? verb,
         int top)
     {
-        var rows = await connection.QueryAsync<JsonSearchRow>("""
+        var rows = await connection.QueryAsync<JsonSearchRow>($"""
             SELECT
                 a.name AS ApiName,
                 e.verb AS Verb,
@@ -106,7 +106,7 @@ public sealed class SqliteVectorSearch
                 v.embedding AS EmbeddingJson
             FROM endpoints e
             JOIN apis a ON a.id = e.api_id
-            JOIN endpoints_vec v ON v.endpoint_id = e.id
+            JOIN {SqliteSchemaInitializer.JsonFallbackTableName} v ON v.endpoint_id = e.id
             WHERE (@ApiName IS NULL OR a.name = @ApiName)
               AND (@Verb IS NULL OR e.verb = upper(@Verb));
             """, new { ApiName = apiName, Verb = verb });
