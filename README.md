@@ -24,8 +24,8 @@ Edit `src/SwaggerMcp/appsettings.json`, or mount your own config into `/app/apps
     "EmbeddingTokenizerPath": "./models/vocab.txt",
     "RefreshOnStartup": true,
     "Sources": [
-      { "name": "billing-service", "url": "https://billing.local/swagger/v1/swagger.json" },
-      { "name": "identity-service", "url": "https://identity.local/swagger/v1/swagger.json" }
+      { "name": "petstore", "url": "https://petstore.swagger.io/v2/swagger.json" },
+      { "name": "fakerestapi", "url": "https://fakerestapi.azurewebsites.net/swagger/v1/swagger.json" }
     ]
   }
 }
@@ -44,6 +44,22 @@ The Docker image includes:
 - .NET 10 runtime app
 - bundled `all-MiniLM-L6-v2` quantized ONNX model and tokenizer
 - `sqlite-vec` loadable extension for the target Docker architecture
+
+## Run with Docker Compose
+
+Create `${HOME}/Documents/swagger-mcp.json` (or update the path in `docker-compose.yml`), then run:
+
+```bash
+docker compose up -d
+```
+
+Useful commands:
+
+```bash
+docker compose logs -f swagger-mcp
+docker compose restart swagger-mcp
+docker compose down
+```
 
 ## VS Code Copilot
 

@@ -1,0 +1,10 @@
+services:
+  swagger-mcp:
+    image: swagger-mcp:latest
+    container_name: swagger-mcp
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    volumes:
+      - ${HOME}/Documents/swagger-mcp/appsettings.json:/app/appsettings.json:ro
+      - ${HOME}/Documents/swagger-mcp/data:/app/data
