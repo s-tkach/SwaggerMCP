@@ -4,6 +4,14 @@ Local MCP server for indexing multiple `/swagger/v1/swagger.json` OpenAPI docume
 
 The server stores parsed endpoint metadata in SQLite, uses `sqlite-vec` for vector search when available, and embeds operation summaries/schemas with a built-in `sentence-transformers/all-MiniLM-L6-v2` ONNX model.
 
+## Requirements
+
+- .NET 10 SDK for local development (`dotnet --list-sdks` should show a 10.x SDK).
+- Docker, when running the packaged MCP server.
+- The `all-MiniLM-L6-v2` ONNX model and `vocab.txt` tokenizer under `models/` when running from source.
+
+The ONNX model is about 90 MB. Local builds download and verify it when missing, using the URL and SHA-256 pinned in `src/SwaggerMcp/SwaggerMcp.csproj`. CI or test-only builds that do not need runtime embedding assets can skip that work with `/p:SkipEmbeddingModelDownload=true`.
+
 ## Tools
 
 - `list_apis` - list indexed APIs with title, version, endpoint count, and index time.
@@ -45,7 +53,7 @@ The Docker image includes:
 - built-in `all-MiniLM-L6-v2` ONNX model and tokenizer
 - `sqlite-vec` loadable extension for the target Docker architecture
 
-The ONNX model is downloaded during build only when missing, pinned by URL and SHA-256 in `src/SwaggerMcp/SwaggerMcp.csproj`, and copied into publish/Docker output. The downloaded `.onnx` file is ignored by git.
+The ONNX model is downloaded during build only when missing, pinned by URL and SHA-256 in `src/SwaggerMcp/SwaggerMcp.csproj`, and copied into publish/Docker output. The downloaded `.onnx` file is ignored by git. Runtime startup fails fast if the configured model or tokenizer cannot be loaded.
 
 ## Run with Docker Compose
 
@@ -153,6 +161,8 @@ dotnet run --project src/SwaggerMcp/SwaggerMcp.csproj
 # override appsettings path
 dotnet run --project src/SwaggerMcp/SwaggerMcp.csproj -- --appsettings /Users/<your-user>/Documents/swagger-mcp/appsettings.json
 ```
+
+The source path examples use the repository directory name `SwaggerMCP`; project and namespace names use `SwaggerMcp`.
 
 When the MCP client starts the server, logs are written to stderr so stdout remains reserved for MCP stdio messages.
 

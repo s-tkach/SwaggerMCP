@@ -1,29 +1,13 @@
 using System.Text.Json;
 using Microsoft.OpenApi.Models;
 using Microsoft.OpenApi.Readers;
+using SwaggerMcp.Json;
 using SwaggerMcp.Models;
 
 namespace SwaggerMcp.Indexing;
 
-public sealed class OpenApiChunker
+public sealed class OpenApiChunker(SchemaSummarizer schemaSummarizer)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
-    {
-        WriteIndented = false
-    };
-
-    private readonly SchemaSummarizer _schemaSummarizer;
-
-    public OpenApiChunker()
-        : this(new SchemaSummarizer())
-    {
-    }
-
-    public OpenApiChunker(SchemaSummarizer schemaSummarizer)
-    {
-        _schemaSummarizer = schemaSummarizer;
-    }
-
     public EndpointDocument Chunk(string apiName, FetchedSwagger swagger)
     {
         var document = new OpenApiStringReader().Read(swagger.Json, out var diagnostic);
@@ -39,7 +23,7 @@ public sealed class OpenApiChunker
             foreach (var (operationType, operation) in pathItem.Operations)
             {
                 var verb = operationType.ToString().ToUpperInvariant();
-                var schemaSummary = _schemaSummarizer.Summarize(
+                var schemaSummary = schemaSummarizer.Summarize(
                     pathItem.Parameters,
                     operation.Parameters,
                     operation.RequestBody,
@@ -53,9 +37,9 @@ public sealed class OpenApiChunker
                     operation.Summary,
                     operation.Description,
                     operation.Tags.Select(tag => tag.Name).Where(name => !string.IsNullOrWhiteSpace(name)).ToList(),
-                    JsonSerializer.Serialize(schemaSummary.Parameters, JsonOptions),
-                    schemaSummary.RequestBody is null ? null : JsonSerializer.Serialize(schemaSummary.RequestBody, JsonOptions),
-                    JsonSerializer.Serialize(schemaSummary.Responses, JsonOptions),
+                    JsonSerializer.Serialize(schemaSummary.Parameters, JsonDefaults.Web),
+                    schemaSummary.RequestBody is null ? null : JsonSerializer.Serialize(schemaSummary.RequestBody, JsonDefaults.Web),
+                    JsonSerializer.Serialize(schemaSummary.Responses, JsonDefaults.Web),
                     schemaSummary.Text,
                     embeddingText));
             }

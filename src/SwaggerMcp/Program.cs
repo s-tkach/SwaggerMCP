@@ -11,8 +11,12 @@ using SwaggerMcp.Storage;
 using SwaggerMcp.Tools;
 
 var builder = Host.CreateApplicationBuilder(args);
-var appsettingsPath = GetAppsettingsOverridePath(args);
+builder.Configuration.AddCommandLine(args, new Dictionary<string, string>
+{
+    ["--appsettings"] = "AppsettingsPath"
+});
 
+var appsettingsPath = builder.Configuration["AppsettingsPath"];
 if (!string.IsNullOrWhiteSpace(appsettingsPath))
 {
     builder.Configuration.AddJsonFile(appsettingsPath, optional: false, reloadOnChange: false);
@@ -44,36 +48,3 @@ builder.Services
     .WithTools<SwaggerTools>();
 
 await builder.Build().RunAsync();
-
-static string? GetAppsettingsOverridePath(string[] args)
-{
-    const string key = "--appsettings";
-
-    for (var i = 0; i < args.Length; i++)
-    {
-        var arg = args[i];
-
-        if (arg.Equals(key, StringComparison.OrdinalIgnoreCase))
-        {
-            if (i + 1 >= args.Length || string.IsNullOrWhiteSpace(args[i + 1]) || args[i + 1].StartsWith("--", StringComparison.Ordinal))
-            {
-                throw new ArgumentException($"{key} requires a JSON file path value.");
-            }
-
-            return args[i + 1];
-        }
-
-        if (arg.StartsWith($"{key}=", StringComparison.OrdinalIgnoreCase))
-        {
-            var value = arg[(key.Length + 1)..];
-            if (string.IsNullOrWhiteSpace(value))
-            {
-                throw new ArgumentException($"{key} requires a JSON file path value.");
-            }
-
-            return value;
-        }
-    }
-
-    return null;
-}

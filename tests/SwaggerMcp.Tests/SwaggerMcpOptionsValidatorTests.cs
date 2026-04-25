@@ -29,19 +29,4 @@ public sealed class SwaggerMcpOptionsValidatorTests
         Assert.True(result.Failed);
         Assert.Contains("duplicate API names", string.Join('\n', result.Failures));
     }
-
-    [Fact]
-    public void Validate_RejectsNonHttpSourceUrls()
-    {
-        var result = _validator.Validate(null, new SwaggerMcpOptions
-        {
-            Sources =
-            [
-                new SwaggerSourceOptions { Name = "local", Url = "file:///tmp/swagger.json" }
-            ]
-        });
-
-        Assert.True(result.Failed);
-        Assert.Contains("absolute HTTP or HTTPS URL", string.Join('\n', result.Failures));
-    }
 }

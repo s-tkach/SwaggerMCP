@@ -2,9 +2,6 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
     <InvariantGlobalization>true</InvariantGlobalization>
     <EmbeddingModelFileName>all-MiniLM-L6-v2.onnx</EmbeddingModelFileName>
     <EmbeddingModelDir>$(MSBuildProjectDirectory)/../../models</EmbeddingModelDir>
@@ -16,6 +13,7 @@
   <ItemGroup>
     <PackageReference Include="Dapper" Version="2.1.72" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.7" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.CommandLine" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.Hosting" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.Http" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.7" />
@@ -29,17 +27,16 @@
   <ItemGroup>
     <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="appsettings.example.json" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="$(EmbeddingModelPath)" Link="models/$(EmbeddingModelFileName)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../models/**/*" LinkBase="models" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(EmbeddingModelPath)" Link="models/$(EmbeddingModelFileName)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="Exists('$(EmbeddingModelPath)')" />
   </ItemGroup>
 
-  <Target Name="DownloadEmbeddingModel" BeforeTargets="BeforeBuild" Condition="!Exists('$(EmbeddingModelPath)')">
+  <Target Name="DownloadEmbeddingModel" BeforeTargets="BeforeBuild" Condition="'$(SkipEmbeddingModelDownload)' != 'true' AND !Exists('$(EmbeddingModelPath)')">
     <Message Importance="High" Text="Downloading built-in embedding model from $(EmbeddingModelUrl)" />
     <MakeDir Directories="$(EmbeddingModelDir)" />
     <DownloadFile SourceUrl="$(EmbeddingModelUrl)" DestinationFolder="$(EmbeddingModelDir)" DestinationFileName="$(EmbeddingModelFileName)" />
   </Target>
 
-  <Target Name="VerifyEmbeddingModel" BeforeTargets="BeforeBuild" DependsOnTargets="DownloadEmbeddingModel">
+  <Target Name="VerifyEmbeddingModel" BeforeTargets="BeforeBuild" DependsOnTargets="DownloadEmbeddingModel" Condition="'$(SkipEmbeddingModelDownload)' != 'true'">
     <GetFileHash Files="$(EmbeddingModelPath)" Algorithm="SHA256">
       <Output TaskParameter="Items" ItemName="EmbeddingModelHash" />
     </GetFileHash>

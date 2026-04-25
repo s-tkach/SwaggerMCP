@@ -1,11 +1,12 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using SwaggerMcp.Configuration;
-using SwaggerMcp.Embeddings;
 using SwaggerMcp.Indexing;
 using SwaggerMcp.Models;
 using SwaggerMcp.Storage;
+using SwaggerMcp.Tests.Fakes;
 using SwaggerMcp.Tests.Fixtures;
+using SwaggerMcp.Tests.Support;
 
 namespace SwaggerMcp.Tests;
 
@@ -14,19 +15,16 @@ public sealed class SqliteSwaggerStoreTests
     [Fact]
     public async Task Store_CanUpsertAndSearchEndpoint()
     {
-        var databasePath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.db");
-        var options = Options.Create(new SwaggerMcpOptions { DatabasePath = databasePath });
-        var store = CreateStore(options);
-        var chunker = new OpenApiChunker();
+        await using var database = TempSqliteDatabase.Create();
+        var store = CreateStore(database.Options);
+        var chunker = CreateChunker();
         var embedder = new HashingEmbedder();
         var document = chunker.Chunk(
             "petstore",
             new FetchedSwagger("https://petstore.local/swagger/v1/swagger.json", PetstoreSwagger.Json, "hash"));
 
         await store.InitializeAsync();
-        var embeddings = document.Endpoints.ToDictionary(
-            endpoint => endpoint,
-            endpoint => embedder.EmbedAsync(endpoint.EmbeddingText).AsTask().GetAwaiter().GetResult());
+        var embeddings = await CreateEmbeddingsAsync(document, embedder);
 
         var refresh = await store.UpsertDocumentAsync(document, embeddings);
         var searchVector = await embedder.EmbedAsync("create a pet");
@@ -43,9 +41,8 @@ public sealed class SqliteSwaggerStoreTests
     [Fact]
     public async Task GetEndpoints_FiltersTagsByExactJsonValue()
     {
-        var databasePath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.db");
-        var options = Options.Create(new SwaggerMcpOptions { DatabasePath = databasePath });
-        var store = CreateStore(options);
+        await using var database = TempSqliteDatabase.Create();
+        var store = CreateStore(database.Options);
         var embedder = new HashingEmbedder();
         var document = new EndpointDocument(
             "tag-test",
@@ -59,9 +56,7 @@ public sealed class SqliteSwaggerStoreTests
                 CreateEndpoint("/petty-cash", "petty")
             ]);
 
-        var embeddings = document.Endpoints.ToDictionary(
-            endpoint => endpoint,
-            endpoint => embedder.EmbedAsync(endpoint.EmbeddingText).AsTask().GetAwaiter().GetResult());
+        var embeddings = await CreateEmbeddingsAsync(document, embedder);
 
         await store.UpsertDocumentAsync(document, embeddings);
 
@@ -74,9 +69,8 @@ public sealed class SqliteSwaggerStoreTests
     [Fact]
     public async Task UpsertDocument_RemovesEndpointsMissingFromLatestDocument()
     {
-        var databasePath = Path.Combine(Path.GetTempPath(), $"{Guid.NewGuid():N}.db");
-        var options = Options.Create(new SwaggerMcpOptions { DatabasePath = databasePath });
-        var store = CreateStore(options);
+        await using var database = TempSqliteDatabase.Create();
+        var store = CreateStore(database.Options);
         var embedder = new HashingEmbedder();
         var original = new EndpointDocument(
             "petstore",
@@ -95,8 +89,8 @@ public sealed class SqliteSwaggerStoreTests
             Endpoints = [CreateEndpoint("/pets", "pets")]
         };
 
-        await store.UpsertDocumentAsync(original, CreateEmbeddings(original, embedder));
-        var refresh = await store.UpsertDocumentAsync(updated, CreateEmbeddings(updated, embedder));
+        await store.UpsertDocumentAsync(original, await CreateEmbeddingsAsync(original, embedder));
+        var refresh = await store.UpsertDocumentAsync(updated, await CreateEmbeddingsAsync(updated, embedder));
 
         var endpoints = await store.GetEndpointsAsync("petstore", null, null);
         Assert.Equal(1, refresh.Removed);
@@ -109,6 +103,8 @@ public sealed class SqliteSwaggerStoreTests
             options,
             new SqliteSchemaInitializer(NullLogger<SqliteSchemaInitializer>.Instance),
             new SqliteVectorSearch());
+
+    private static OpenApiChunker CreateChunker() => new(new SchemaSummarizer());
 
     private static EndpointChunk CreateEndpoint(string path, string tag) =>
         new(
@@ -124,8 +120,16 @@ public sealed class SqliteSwaggerStoreTests
             $"responses: 200:{tag}",
             $"GET {path}\ntags: {tag}");
 
-    private static IReadOnlyDictionary<EndpointChunk, float[]> CreateEmbeddings(EndpointDocument document, HashingEmbedder embedder) =>
-        document.Endpoints.ToDictionary(
-            endpoint => endpoint,
-            endpoint => embedder.EmbedAsync(endpoint.EmbeddingText).AsTask().GetAwaiter().GetResult());
+    private static async Task<IReadOnlyDictionary<EndpointChunk, float[]>> CreateEmbeddingsAsync(
+        EndpointDocument document,
+        HashingEmbedder embedder)
+    {
+        var embeddings = new Dictionary<EndpointChunk, float[]>();
+        foreach (var endpoint in document.Endpoints)
+        {
+            embeddings[endpoint] = await embedder.EmbedAsync(endpoint.EmbeddingText);
+        }
+
+        return embeddings;
+    }
 }

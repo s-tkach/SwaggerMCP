@@ -9,10 +9,9 @@ namespace SwaggerMcp.Embeddings;
 
 public sealed class OnnxEmbedder : IEmbedder, IDisposable
 {
-    private readonly HashingEmbedder _fallback = new();
     private readonly ILogger<OnnxEmbedder> _logger;
-    private readonly InferenceSession? _session;
-    private readonly BertTokenizer? _tokenizer;
+    private readonly InferenceSession _session;
+    private readonly BertTokenizer _tokenizer;
 
     public OnnxEmbedder(IOptions<SwaggerMcpOptions> options, ILogger<OnnxEmbedder> logger)
     {
@@ -20,13 +19,16 @@ public sealed class OnnxEmbedder : IEmbedder, IDisposable
 
         var modelPath = options.Value.EmbeddingModelPath;
         var tokenizerPath = options.Value.EmbeddingTokenizerPath;
-        if (!File.Exists(modelPath) || !File.Exists(tokenizerPath))
+        var missingAssets = new[]
         {
-            _logger.LogWarning(
-                "Bundled ONNX assets were not found at {ModelPath} and {TokenizerPath}. Falling back to deterministic local hashing embeddings.",
-                modelPath,
-                tokenizerPath);
-            return;
+            File.Exists(modelPath) ? null : modelPath,
+            File.Exists(tokenizerPath) ? null : tokenizerPath
+        }.Where(path => path is not null);
+
+        if (missingAssets.Any())
+        {
+            throw new InvalidOperationException(
+                $"Required ONNX embedding assets were not found: {string.Join(", ", missingAssets)}.");
         }
 
         try
@@ -39,7 +41,7 @@ public sealed class OnnxEmbedder : IEmbedder, IDisposable
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to initialize bundled ONNX embedder. Falling back to deterministic local hashing embeddings.");
+            throw new InvalidOperationException("Failed to initialize the ONNX embedder.", ex);
         }
     }
 
@@ -47,11 +49,6 @@ public sealed class OnnxEmbedder : IEmbedder, IDisposable
 
     public ValueTask<float[]> EmbedAsync(string text, CancellationToken cancellationToken = default)
     {
-        if (_session is null || _tokenizer is null)
-        {
-            return _fallback.EmbedAsync(text, cancellationToken);
-        }
-
         cancellationToken.ThrowIfCancellationRequested();
 
         try
@@ -89,13 +86,13 @@ public sealed class OnnxEmbedder : IEmbedder, IDisposable
             using var results = _session.Run(inputs);
             var tensor = results.First().AsTensor<float>();
             var vector = ExtractSentenceVector(tensor, tokenIds.Length);
-            Normalize(vector);
+            EmbeddingMath.Normalize(vector);
             return ValueTask.FromResult(vector);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "ONNX embedding failed. Falling back to deterministic local hashing embeddings.");
-            return _fallback.EmbedAsync(text, cancellationToken);
+            _logger.LogError(ex, "ONNX embedding failed.");
+            throw;
         }
     }
 
@@ -144,18 +141,4 @@ public sealed class OnnxEmbedder : IEmbedder, IDisposable
         return vector;
     }
 
-    private static void Normalize(float[] vector)
-    {
-        var sum = vector.Sum(value => value * value);
-        if (sum <= 0)
-        {
-            return;
-        }
-
-        var length = MathF.Sqrt(sum);
-        for (var i = 0; i < vector.Length; i++)
-        {
-            vector[i] /= length;
-        }
-    }
 }

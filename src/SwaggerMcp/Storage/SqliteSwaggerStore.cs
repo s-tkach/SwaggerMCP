@@ -3,14 +3,13 @@ using Dapper;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
 using SwaggerMcp.Configuration;
+using SwaggerMcp.Json;
 using SwaggerMcp.Models;
 
 namespace SwaggerMcp.Storage;
 
 public sealed class SqliteSwaggerStore : ISwaggerStore
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
     private readonly string _connectionString;
     private readonly SqliteSchemaInitializer _schemaInitializer;
     private readonly SqliteVectorSearch _vectorSearch;
@@ -238,7 +237,7 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
                 endpoint.OperationId,
                 endpoint.Summary,
                 endpoint.Description,
-                Tags = JsonSerializer.Serialize(endpoint.Tags, JsonOptions),
+                Tags = JsonSerializer.Serialize(endpoint.Tags, JsonDefaults.Web),
                 endpoint.ParametersJson,
                 endpoint.RequestSchemaJson,
                 endpoint.ResponsesJson,
@@ -249,21 +248,44 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
         }
 
         var removedKeys = existing.Keys.Where(key => !seen.Contains(key)).ToList();
-        foreach (var (oldVerb, oldPath) in removedKeys)
+        if (removedKeys.Count > 0)
         {
-            var endpointId = await connection.ExecuteScalarAsync<long?>(
-                "SELECT id FROM endpoints WHERE api_id = @ApiId AND verb = @Verb AND path = @Path;",
-                new { ApiId = apiId, Verb = oldVerb, Path = oldPath },
-                transaction);
+            var removedKeysJson = JsonSerializer.Serialize(
+                removedKeys.Select(key => new { key.Verb, key.Path }),
+                JsonDefaults.Web);
 
-            if (endpointId is not null)
+            if (_vectorMode == SqliteVectorMode.SqliteVec)
             {
-                await _vectorSearch.DeleteEmbeddingAsync(connection, transaction, _vectorMode, endpointId.Value);
+                await connection.ExecuteAsync("""
+                    WITH removed(verb, path) AS (
+                      SELECT json_extract(value, '$.verb'), json_extract(value, '$.path')
+                      FROM json_each(@RemovedKeysJson)
+                    )
+                    DELETE FROM endpoints_vec
+                    WHERE rowid IN (
+                      SELECT e.id
+                      FROM endpoints e
+                      JOIN removed r ON r.verb = e.verb AND r.path = e.path
+                      WHERE e.api_id = @ApiId
+                    );
+                    """, new { ApiId = apiId, RemovedKeysJson = removedKeysJson }, transaction);
             }
 
             await connection.ExecuteAsync(
-                "DELETE FROM endpoints WHERE api_id = @ApiId AND verb = @Verb AND path = @Path;",
-                new { ApiId = apiId, Verb = oldVerb, Path = oldPath },
+                """
+                WITH removed(verb, path) AS (
+                  SELECT json_extract(value, '$.verb'), json_extract(value, '$.path')
+                  FROM json_each(@RemovedKeysJson)
+                )
+                DELETE FROM endpoints
+                WHERE api_id = @ApiId
+                  AND EXISTS (
+                    SELECT 1
+                    FROM removed r
+                    WHERE r.verb = endpoints.verb AND r.path = endpoints.path
+                  );
+                """,
+                new { ApiId = apiId, RemovedKeysJson = removedKeysJson },
                 transaction);
         }
 
@@ -286,6 +308,7 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
     {
         var connection = CreateConnection();
         await connection.OpenAsync(cancellationToken);
+        await connection.ExecuteAsync("PRAGMA foreign_keys = ON;");
         if (loadVectorExtension && _vectorMode == SqliteVectorMode.SqliteVec)
         {
             _schemaInitializer.LoadVectorExtension(connection);
@@ -293,7 +316,4 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
 
         return connection;
     }
-
-    private static IReadOnlyList<string> DeserializeTags(string json) =>
-        JsonSerializer.Deserialize<IReadOnlyList<string>>(json, JsonOptions) ?? [];
 }

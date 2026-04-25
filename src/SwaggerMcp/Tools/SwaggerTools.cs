@@ -3,6 +3,7 @@ using System.Text.Json;
 using ModelContextProtocol.Server;
 using SwaggerMcp.Embeddings;
 using SwaggerMcp.Indexing;
+using SwaggerMcp.Json;
 using SwaggerMcp.Storage;
 
 namespace SwaggerMcp.Tools;
@@ -13,95 +14,81 @@ public sealed class SwaggerTools(
     IEmbedder embedder,
     SwaggerIndexingService indexingService)
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
     [McpServerTool(Name = "list_apis")]
     [Description("List configured and indexed APIs with title, version, endpoint count, and last index time.")]
-    public async Task<object> ListApis(CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<ApiSummaryDto>> ListApis(CancellationToken cancellationToken = default)
     {
-        await store.InitializeAsync(cancellationToken);
         var apis = await store.ListApisAsync(cancellationToken);
-        return apis.Select(api => new
-        {
+        return apis.Select(api => new ApiSummaryDto(
             api.Name,
             api.Title,
             api.Version,
             api.EndpointCount,
-            api.IndexedAt
-        });
+            api.IndexedAt)).ToList();
     }
 
     [McpServerTool(Name = "get_endpoints")]
     [Description("Return a compact list of endpoints for one API. Optional tag and verb filters are supported.")]
-    public async Task<object> GetEndpoints(
+    public async Task<IReadOnlyList<EndpointSummaryDto>> GetEndpoints(
         [Description("Configured API name, for example billing-service.")] string apiName,
         [Description("Optional OpenAPI tag filter.")] string? tag = null,
         [Description("Optional HTTP verb filter, for example GET or POST.")] string? verb = null,
         CancellationToken cancellationToken = default)
     {
-        await store.InitializeAsync(cancellationToken);
         var endpoints = await store.GetEndpointsAsync(apiName, tag, verb, cancellationToken);
-        return endpoints.Select(endpoint => new
-        {
+        return endpoints.Select(endpoint => new EndpointSummaryDto(
             endpoint.Verb,
             endpoint.Path,
             endpoint.Summary,
-            Tags = DeserializeTags(endpoint.TagsJson)
-        });
+            DeserializeTags(endpoint.TagsJson))).ToList();
     }
 
     [McpServerTool(Name = "search_endpoints")]
     [Description("Semantically search endpoint purpose, path, params, request schema, and response schema across indexed APIs.")]
-    public async Task<object> SearchEndpoints(
+    public async Task<IReadOnlyList<SearchHitDto>> SearchEndpoints(
         [Description("Natural-language search query, for example 'create invoice' or 'find users by email'.")] string query,
         [Description("Optional API name to limit search.")] string? apiName = null,
         [Description("Optional HTTP verb filter.")] string? verb = null,
         [Description("Maximum number of results.")] int top = 10,
         CancellationToken cancellationToken = default)
     {
-        await store.InitializeAsync(cancellationToken);
         var embedding = await embedder.EmbedAsync(query, cancellationToken);
         var results = await store.SearchEndpointsAsync(embedding, apiName, verb, top, cancellationToken);
-        return results.Select(result => new
-        {
+        return results.Select(result => new SearchHitDto(
             result.ApiName,
             result.Verb,
             result.Path,
             result.Summary,
             result.Tags,
-            Score = Math.Round(result.Score, 4)
-        });
+            Math.Round(result.Score, 4))).ToList();
     }
 
     [McpServerTool(Name = "get_endpoint_details")]
     [Description("Return full endpoint details including parameters, request body schema, responses, tags, and summaries.")]
-    public async Task<object?> GetEndpointDetails(
+    public async Task<EndpointDetailsDto?> GetEndpointDetails(
         [Description("Configured API name, for example billing-service.")] string apiName,
         [Description("HTTP verb, for example GET or POST.")] string verb,
         [Description("OpenAPI path, for example /invoices/{id}.")] string path,
         CancellationToken cancellationToken = default)
     {
-        await store.InitializeAsync(cancellationToken);
         var endpoint = await store.GetEndpointDetailsAsync(apiName, verb, path, cancellationToken);
         if (endpoint is null)
         {
             return null;
         }
 
-        return new
-        {
+        return new EndpointDetailsDto(
             endpoint.ApiName,
             endpoint.Verb,
             endpoint.Path,
             endpoint.OperationId,
             endpoint.Summary,
             endpoint.Description,
-            Tags = DeserializeTags(endpoint.TagsJson),
-            Parameters = DeserializeJson(endpoint.ParametersJson),
-            RequestSchema = endpoint.RequestSchemaJson is null ? null : DeserializeJson(endpoint.RequestSchemaJson),
-            Responses = DeserializeJson(endpoint.ResponsesJson),
-            endpoint.SchemaSummary
-        };
+            DeserializeTags(endpoint.TagsJson),
+            DeserializeJson(endpoint.ParametersJson),
+            endpoint.RequestSchemaJson is null ? null : DeserializeJson(endpoint.RequestSchemaJson),
+            DeserializeJson(endpoint.ResponsesJson),
+            endpoint.SchemaSummary);
     }
 
     [McpServerTool(Name = "refresh_api")]
@@ -119,8 +106,42 @@ public sealed class SwaggerTools(
     }
 
     private static IReadOnlyList<string> DeserializeTags(string json) =>
-        JsonSerializer.Deserialize<IReadOnlyList<string>>(json, JsonOptions) ?? [];
+        JsonSerializer.Deserialize<IReadOnlyList<string>>(json, JsonDefaults.Web) ?? [];
 
     private static object? DeserializeJson(string json) =>
-        JsonSerializer.Deserialize<object>(json, JsonOptions);
+        JsonSerializer.Deserialize<object>(json, JsonDefaults.Web);
 }
+
+public sealed record ApiSummaryDto(
+    string Name,
+    string? Title,
+    string? Version,
+    int EndpointCount,
+    DateTimeOffset? IndexedAt);
+
+public sealed record EndpointSummaryDto(
+    string Verb,
+    string Path,
+    string? Summary,
+    IReadOnlyList<string> Tags);
+
+public sealed record SearchHitDto(
+    string ApiName,
+    string Verb,
+    string Path,
+    string? Summary,
+    IReadOnlyList<string> Tags,
+    double Score);
+
+public sealed record EndpointDetailsDto(
+    string ApiName,
+    string Verb,
+    string Path,
+    string? OperationId,
+    string? Summary,
+    string? Description,
+    IReadOnlyList<string> Tags,
+    object? Parameters,
+    object? RequestSchema,
+    object? Responses,
+    string SchemaSummary);

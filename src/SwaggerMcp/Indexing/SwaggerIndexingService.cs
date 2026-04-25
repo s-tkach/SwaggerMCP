@@ -9,7 +9,7 @@ using SwaggerMcp.Storage;
 namespace SwaggerMcp.Indexing;
 
 public sealed class SwaggerIndexingService(
-    IOptionsMonitor<SwaggerMcpOptions> options,
+    IOptions<SwaggerMcpOptions> options,
     SwaggerFetcher fetcher,
     OpenApiChunker chunker,
     IEmbedder embedder,
@@ -20,12 +20,12 @@ public sealed class SwaggerIndexingService(
     {
         await store.InitializeAsync(stoppingToken);
 
-        if (!options.CurrentValue.RefreshOnStartup)
+        if (!options.Value.RefreshOnStartup)
         {
             return;
         }
 
-        foreach (var source in options.CurrentValue.Sources)
+        foreach (var source in options.Value.Sources)
         {
             if (stoppingToken.IsCancellationRequested)
             {
@@ -42,20 +42,26 @@ public sealed class SwaggerIndexingService(
 
     public async Task<IReadOnlyList<RefreshResult>> RefreshAllAsync(CancellationToken cancellationToken = default)
     {
-        await store.InitializeAsync(cancellationToken);
-
-        var results = new List<RefreshResult>();
-        foreach (var source in options.CurrentValue.Sources)
+        using var throttler = new SemaphoreSlim(4);
+        var tasks = options.Value.Sources.Select(async source =>
         {
-            results.Add(await RefreshAsync(source.Name, cancellationToken));
-        }
+            await throttler.WaitAsync(cancellationToken);
+            try
+            {
+                return await RefreshAsync(source.Name, cancellationToken);
+            }
+            finally
+            {
+                throttler.Release();
+            }
+        });
 
-        return results;
+        return await Task.WhenAll(tasks);
     }
 
     public async Task<RefreshResult> RefreshAsync(string apiName, CancellationToken cancellationToken = default)
     {
-        var source = options.CurrentValue.Sources.FirstOrDefault(
+        var source = options.Value.Sources.FirstOrDefault(
             configured => string.Equals(configured.Name, apiName, StringComparison.OrdinalIgnoreCase));
 
         if (source is null)
@@ -65,7 +71,6 @@ public sealed class SwaggerIndexingService(
 
         try
         {
-            await store.InitializeAsync(cancellationToken);
             var fetched = await fetcher.FetchAsync(source.Url, cancellationToken);
             var existingHash = await store.GetSpecHashAsync(source.Name, cancellationToken);
             if (string.Equals(existingHash, fetched.Hash, StringComparison.Ordinal))

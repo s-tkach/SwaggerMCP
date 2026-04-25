@@ -2,14 +2,13 @@ using System.Data;
 using System.Text.Json;
 using Dapper;
 using Microsoft.Data.Sqlite;
+using SwaggerMcp.Json;
 using SwaggerMcp.Models;
 
 namespace SwaggerMcp.Storage;
 
 public sealed class SqliteVectorSearch
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
     public Task UpsertEmbeddingAsync(
         SqliteConnection connection,
         IDbTransaction transaction,
@@ -126,13 +125,13 @@ public sealed class SqliteVectorSearch
     }
 
     private static string SerializeVector(float[] vector) =>
-        JsonSerializer.Serialize(vector, JsonOptions);
+        JsonSerializer.Serialize(vector, JsonDefaults.Web);
 
     private static IReadOnlyList<string> DeserializeTags(string json) =>
-        JsonSerializer.Deserialize<IReadOnlyList<string>>(json, JsonOptions) ?? [];
+        JsonSerializer.Deserialize<IReadOnlyList<string>>(json, JsonDefaults.Web) ?? [];
 
     private static float[] DeserializeVector(string json) =>
-        JsonSerializer.Deserialize<float[]>(json, JsonOptions) ?? [];
+        JsonSerializer.Deserialize<float[]>(json, JsonDefaults.Web) ?? [];
 
     private static double DistanceToCosineScore(double distance)
     {
