@@ -111,6 +111,29 @@ You can also run directly from source with `dotnet`:
 }
 ```
 
+To use `sqlite-vec` when running from source, download the matching loadable extension for your OS/architecture and point the server at it with `SQLITE_VEC_EXTENSION_PATH`:
+
+```json
+{
+  "servers": {
+    "swagger": {
+      "command": "dotnet",
+      "args": [
+        "run",
+        "--project",
+        "/Users/<your-user>/Source/SwaggerMCP/src/SwaggerMcp/SwaggerMcp.csproj",
+        "--",
+        "--appsettings",
+        "/Users/<your-user>/Documents/swagger-mcp/appsettings.json"
+      ],
+      "env": {
+        "SQLITE_VEC_EXTENSION_PATH": "/Users/<your-user>/Documents/swagger-mcp/native/vec0.dylib"
+      }
+    }
+  }
+}
+```
+
 ## Claude Desktop
 
 Add this server to `claude_desktop_config.json`:
@@ -166,10 +189,17 @@ The source path examples use the repository directory name `SwaggerMCP`; project
 
 When the MCP client starts the server, logs are written to stderr so stdout remains reserved for MCP stdio messages.
 
+## Vector Search Modes
+
+The Docker image includes the `sqlite-vec` extension and sets `SQLITE_VEC_EXTENSION_PATH=/app/vec0.so`, so Docker runs use `sqlite-vec` by default.
+
+When running from source, `sqlite-vec` is used only when the native extension can be found. Set `SQLITE_VEC_EXTENSION_PATH` to the full path of the extracted `vec0` library, such as `vec0.dylib` on macOS, `vec0.so` on Linux, or `vec0.dll` on Windows. If the extension path is missing or the library cannot be loaded, the server uses the JSON fallback.
+
+- `sqlite-vec` mode stores embeddings in the `endpoints_vec` virtual table and lets SQLite perform vector matching with `MATCH`, which is faster and better suited for larger indexes.
+- JSON fallback mode stores embeddings as JSON text in `endpoints_vec_json`, loads matching rows into the application, and computes cosine similarity in process. It is slower because it scans candidates in C#, but it keeps local development and unsupported environments working without a native extension.
+
 ## Notes
 
 Large request and response schemas are summarized deterministically before embedding to avoid bloated search records. Full schema details remain available through `get_endpoint_details`.
-
-If `sqlite-vec` cannot be loaded, the server falls back to a compatible local vector table and performs cosine similarity in process.
 
 For every `dotnet run` example with `--appsettings`, `--` is required before `--appsettings` so `dotnet run` stops parsing its own options and forwards the remaining args to the application.
