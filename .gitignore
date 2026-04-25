@@ -10,3 +10,4 @@ data/
 *.db-wal
 TestResults/
 coverage/
+models/*.onnx

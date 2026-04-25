@@ -10,7 +10,7 @@ public sealed class SwaggerMcpOptions
     public string DatabasePath { get; init; } = "./data/swagger-mcp.db";
 
     [Required]
-    public string EmbeddingModelPath { get; init; } = "./models/all-MiniLM-L6-v2-quantized.onnx";
+    public string EmbeddingModelPath { get; init; } = "./models/all-MiniLM-L6-v2.onnx";
 
     [Required]
     public string EmbeddingTokenizerPath { get; init; } = "./models/vocab.txt";

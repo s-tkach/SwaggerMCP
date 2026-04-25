@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Options;
 using ModelContextProtocol.Server;
 using SwaggerMcp.Configuration;
 using SwaggerMcp.Embeddings;
@@ -25,10 +26,14 @@ builder.Services
     .Bind(builder.Configuration.GetSection(SwaggerMcpOptions.SectionName))
     .ValidateDataAnnotations()
     .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<SwaggerMcpOptions>, SwaggerMcpOptionsValidator>();
 
 builder.Services.AddHttpClient<SwaggerFetcher>();
+builder.Services.AddSingleton<SchemaSummarizer>();
 builder.Services.AddSingleton<OpenApiChunker>();
 builder.Services.AddSingleton<IEmbedder, OnnxEmbedder>();
+builder.Services.AddSingleton<SqliteSchemaInitializer>();
+builder.Services.AddSingleton<SqliteVectorSearch>();
 builder.Services.AddSingleton<ISwaggerStore, SqliteSwaggerStore>();
 builder.Services.AddSingleton<SwaggerIndexingService>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<SwaggerIndexingService>());
@@ -50,12 +55,23 @@ static string? GetAppsettingsOverridePath(string[] args)
 
         if (arg.Equals(key, StringComparison.OrdinalIgnoreCase))
         {
-            return i + 1 < args.Length ? args[i + 1] : null;
+            if (i + 1 >= args.Length || string.IsNullOrWhiteSpace(args[i + 1]) || args[i + 1].StartsWith("--", StringComparison.Ordinal))
+            {
+                throw new ArgumentException($"{key} requires a JSON file path value.");
+            }
+
+            return args[i + 1];
         }
 
         if (arg.StartsWith($"{key}=", StringComparison.OrdinalIgnoreCase))
         {
-            return arg[(key.Length + 1)..];
+            var value = arg[(key.Length + 1)..];
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                throw new ArgumentException($"{key} requires a JSON file path value.");
+            }
+
+            return value;
         }
     }
 

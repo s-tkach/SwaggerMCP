@@ -2,7 +2,7 @@
 
 Local MCP server for indexing multiple `/swagger/v1/swagger.json` OpenAPI documents and exposing endpoint discovery tools to VS Code Copilot Chat and Claude Desktop.
 
-The server stores parsed endpoint metadata in SQLite, uses `sqlite-vec` when available, and embeds operation summaries/schemas with a bundled quantized `sentence-transformers/all-MiniLM-L6-v2` ONNX model.
+The server stores parsed endpoint metadata in SQLite, uses `sqlite-vec` for vector search when available, and embeds operation summaries/schemas with a built-in `sentence-transformers/all-MiniLM-L6-v2` ONNX model.
 
 ## Tools
 
@@ -14,13 +14,13 @@ The server stores parsed endpoint metadata in SQLite, uses `sqlite-vec` when ava
 
 ## Configure Sources
 
-Edit `src/SwaggerMcp/appsettings.json`, or mount your own config into `/app/appsettings.json` when running Docker:
+Copy `src/SwaggerMcp/appsettings.example.json` to your own `appsettings.json`, then edit the source list. When running Docker, mount your config into `/app/appsettings.json`:
 
 ```json
 {
   "SwaggerMcp": {
     "DatabasePath": "./data/swagger-mcp.db",
-    "EmbeddingModelPath": "./models/all-MiniLM-L6-v2-quantized.onnx",
+    "EmbeddingModelPath": "./models/all-MiniLM-L6-v2.onnx",
     "EmbeddingTokenizerPath": "./models/vocab.txt",
     "RefreshOnStartup": true,
     "Sources": [
@@ -42,8 +42,10 @@ docker build -t swagger-mcp:latest .
 The Docker image includes:
 
 - .NET 10 runtime app
-- bundled `all-MiniLM-L6-v2` quantized ONNX model and tokenizer
+- built-in `all-MiniLM-L6-v2` ONNX model and tokenizer
 - `sqlite-vec` loadable extension for the target Docker architecture
+
+The ONNX model is downloaded during build only when missing, pinned by URL and SHA-256 in `src/SwaggerMcp/SwaggerMcp.csproj`, and copied into publish/Docker output. The downloaded `.onnx` file is ignored by git.
 
 ## Run with Docker Compose
 

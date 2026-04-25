@@ -88,7 +88,7 @@ public sealed class OnnxEmbedder : IEmbedder, IDisposable
 
             using var results = _session.Run(inputs);
             var tensor = results.First().AsTensor<float>();
-            var vector = MeanPool(tensor, tokenIds.Length);
+            var vector = ExtractSentenceVector(tensor, tokenIds.Length);
             Normalize(vector);
             return ValueTask.FromResult(vector);
         }
@@ -101,15 +101,32 @@ public sealed class OnnxEmbedder : IEmbedder, IDisposable
 
     public void Dispose() => _session?.Dispose();
 
-    private static float[] MeanPool(Tensor<float> tensor, int tokenCount)
+    private static float[] ExtractSentenceVector(Tensor<float> tensor, int tokenCount)
+    {
+        var dimensions = tensor.Dimensions.ToArray();
+        return dimensions.Length switch
+        {
+            2 => CopyPooledVector(tensor, dimensions),
+            3 => MeanPool(tensor, tokenCount, dimensions),
+            _ => new float[384]
+        };
+    }
+
+    private static float[] CopyPooledVector(Tensor<float> tensor, int[] dimensions)
     {
         var vector = new float[384];
-        var dimensions = tensor.Dimensions.ToArray();
-        if (dimensions.Length < 3)
+        var hidden = Math.Min(vector.Length, dimensions[1]);
+        for (var dimension = 0; dimension < hidden; dimension++)
         {
-            return vector;
+            vector[dimension] = tensor[0, dimension];
         }
 
+        return vector;
+    }
+
+    private static float[] MeanPool(Tensor<float> tensor, int tokenCount, int[] dimensions)
+    {
+        var vector = new float[384];
         var hidden = Math.Min(vector.Length, dimensions[2]);
         for (var token = 0; token < tokenCount; token++)
         {

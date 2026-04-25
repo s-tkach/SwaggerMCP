@@ -1,9 +1,7 @@
 using System.Text.Json;
 using Dapper;
 using Microsoft.Data.Sqlite;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using System.Runtime.InteropServices;
 using SwaggerMcp.Configuration;
 using SwaggerMcp.Models;
 
@@ -14,57 +12,53 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly string _connectionString;
-    private readonly ILogger<SqliteSwaggerStore> _logger;
-    private bool _sqliteVecEnabled;
+    private readonly SqliteSchemaInitializer _schemaInitializer;
+    private readonly SqliteVectorSearch _vectorSearch;
+    private readonly SemaphoreSlim _initializationLock = new(1, 1);
+    private bool _initialized;
+    private SqliteVectorMode _vectorMode = SqliteVectorMode.JsonFallback;
 
-    public SqliteSwaggerStore(IOptions<SwaggerMcpOptions> options, ILogger<SqliteSwaggerStore> logger)
+    public SqliteSwaggerStore(
+        IOptions<SwaggerMcpOptions> options,
+        SqliteSchemaInitializer schemaInitializer,
+        SqliteVectorSearch vectorSearch)
     {
-        _logger = logger;
         var databasePath = Path.GetFullPath(options.Value.DatabasePath);
         Directory.CreateDirectory(Path.GetDirectoryName(databasePath)!);
         _connectionString = new SqliteConnectionStringBuilder { DataSource = databasePath }.ToString();
+        _schemaInitializer = schemaInitializer;
+        _vectorSearch = vectorSearch;
     }
 
     public async Task InitializeAsync(CancellationToken cancellationToken = default)
     {
-        await using var connection = CreateConnection();
-        await connection.OpenAsync(cancellationToken);
+        if (_initialized)
+        {
+            return;
+        }
 
-        await connection.ExecuteAsync("PRAGMA foreign_keys = ON;");
-        await connection.ExecuteAsync("""
-            CREATE TABLE IF NOT EXISTS apis (
-              id INTEGER PRIMARY KEY,
-              name TEXT UNIQUE NOT NULL,
-              source_url TEXT NOT NULL,
-              base_url TEXT,
-              title TEXT,
-              version TEXT,
-              spec_hash TEXT,
-              indexed_at TEXT
-            );
+        await _initializationLock.WaitAsync(cancellationToken);
+        try
+        {
+            if (_initialized)
+            {
+                return;
+            }
 
-            CREATE TABLE IF NOT EXISTS endpoints (
-              id INTEGER PRIMARY KEY,
-              api_id INTEGER NOT NULL REFERENCES apis(id) ON DELETE CASCADE,
-              verb TEXT NOT NULL,
-              path TEXT NOT NULL,
-              operation_id TEXT,
-              summary TEXT,
-              description TEXT,
-              tags TEXT NOT NULL,
-              parameters_json TEXT NOT NULL,
-              request_schema_json TEXT,
-              responses_json TEXT NOT NULL,
-              schema_summary TEXT NOT NULL,
-              UNIQUE(api_id, verb, path)
-            );
-            """);
-
-        _sqliteVecEnabled = await TryCreateVectorTableAsync(connection);
+            await using var connection = CreateConnection();
+            await connection.OpenAsync(cancellationToken);
+            _vectorMode = await _schemaInitializer.InitializeAsync(connection);
+            _initialized = true;
+        }
+        finally
+        {
+            _initializationLock.Release();
+        }
     }
 
     public async Task<IReadOnlyList<ApiRecord>> ListApisAsync(CancellationToken cancellationToken = default)
     {
+        await InitializeAsync(cancellationToken);
         await using var connection = CreateConnection();
         var rows = await connection.QueryAsync<ApiRecord>("""
             SELECT
@@ -92,6 +86,7 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
         string? verb,
         CancellationToken cancellationToken = default)
     {
+        await InitializeAsync(cancellationToken);
         await using var connection = CreateConnection();
         var rows = await connection.QueryAsync<EndpointRecord>("""
             SELECT
@@ -112,7 +107,12 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
             JOIN apis a ON a.id = e.api_id
             WHERE a.name = @ApiName
               AND (@Verb IS NULL OR e.verb = upper(@Verb))
-              AND (@Tag IS NULL OR e.tags LIKE '%' || @Tag || '%')
+              AND (
+                @Tag IS NULL OR EXISTS (
+                  SELECT 1 FROM json_each(e.tags)
+                  WHERE value = @Tag
+                )
+              )
             ORDER BY e.path, e.verb;
             """, new { ApiName = apiName, Tag = tag, Verb = verb });
 
@@ -125,6 +125,7 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
         string path,
         CancellationToken cancellationToken = default)
     {
+        await InitializeAsync(cancellationToken);
         await using var connection = CreateConnection();
         return await connection.QuerySingleOrDefaultAsync<EndpointRecord>("""
             SELECT
@@ -154,35 +155,9 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
         int top,
         CancellationToken cancellationToken = default)
     {
-        top = Math.Clamp(top, 1, 25);
-        await using var connection = CreateConnection();
-
-        var rows = await connection.QueryAsync<SearchRow>("""
-            SELECT
-                a.name AS ApiName,
-                e.verb AS Verb,
-                e.path AS Path,
-                e.summary AS Summary,
-                e.tags AS TagsJson,
-                v.embedding AS EmbeddingJson
-            FROM endpoints e
-            JOIN apis a ON a.id = e.api_id
-            JOIN endpoints_vec v ON v.endpoint_id = e.id
-            WHERE (@ApiName IS NULL OR a.name = @ApiName)
-              AND (@Verb IS NULL OR e.verb = upper(@Verb));
-            """, new { ApiName = apiName, Verb = verb });
-
-        return rows
-            .Select(row => new EndpointSearchResult(
-                row.ApiName,
-                row.Verb,
-                row.Path,
-                row.Summary,
-                DeserializeTags(row.TagsJson),
-                CosineSimilarity(embedding, DeserializeVector(row.EmbeddingJson))))
-            .OrderByDescending(result => result.Score)
-            .Take(top)
-            .ToList();
+        await InitializeAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(loadVectorExtension: true, cancellationToken);
+        return await _vectorSearch.SearchAsync(connection, _vectorMode, embedding, apiName, verb, top);
     }
 
     public async Task<RefreshResult> UpsertDocumentAsync(
@@ -190,8 +165,8 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
         IReadOnlyDictionary<EndpointChunk, float[]> embeddings,
         CancellationToken cancellationToken = default)
     {
-        await using var connection = CreateConnection();
-        await connection.OpenAsync(cancellationToken);
+        await InitializeAsync(cancellationToken);
+        await using var connection = await OpenConnectionAsync(loadVectorExtension: true, cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
 
         var existing = (await connection.QueryAsync<(string Verb, string Path, string Hash)>(
@@ -270,19 +245,22 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
                 endpoint.SchemaSummary
             }, transaction);
 
-            await connection.ExecuteAsync("""
-                INSERT OR REPLACE INTO endpoints_vec (endpoint_id, embedding)
-                VALUES (@EndpointId, @Embedding);
-                """, new
-            {
-                EndpointId = endpointId,
-                Embedding = JsonSerializer.Serialize(embeddings[endpoint], JsonOptions)
-            }, transaction);
+            await _vectorSearch.UpsertEmbeddingAsync(connection, transaction, _vectorMode, endpointId, embeddings[endpoint]);
         }
 
         var removedKeys = existing.Keys.Where(key => !seen.Contains(key)).ToList();
         foreach (var (oldVerb, oldPath) in removedKeys)
         {
+            var endpointId = await connection.ExecuteScalarAsync<long?>(
+                "SELECT id FROM endpoints WHERE api_id = @ApiId AND verb = @Verb AND path = @Path;",
+                new { ApiId = apiId, Verb = oldVerb, Path = oldPath },
+                transaction);
+
+            if (endpointId is not null)
+            {
+                await _vectorSearch.DeleteEmbeddingAsync(connection, transaction, _vectorMode, endpointId.Value);
+            }
+
             await connection.ExecuteAsync(
                 "DELETE FROM endpoints WHERE api_id = @ApiId AND verb = @Verb AND path = @Path;",
                 new { ApiId = apiId, Verb = oldVerb, Path = oldPath },
@@ -295,6 +273,7 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
 
     public async Task<string?> GetSpecHashAsync(string apiName, CancellationToken cancellationToken = default)
     {
+        await InitializeAsync(cancellationToken);
         await using var connection = CreateConnection();
         return await connection.ExecuteScalarAsync<string?>(
             "SELECT spec_hash FROM apis WHERE name = @ApiName;",
@@ -303,111 +282,18 @@ public sealed class SqliteSwaggerStore : ISwaggerStore
 
     private SqliteConnection CreateConnection() => new(_connectionString);
 
-    private async Task<bool> TryCreateVectorTableAsync(SqliteConnection connection)
+    private async Task<SqliteConnection> OpenConnectionAsync(bool loadVectorExtension, CancellationToken cancellationToken)
     {
-        var extensionPath = ResolveVecExtensionPath();
-        if (string.IsNullOrWhiteSpace(extensionPath))
+        var connection = CreateConnection();
+        await connection.OpenAsync(cancellationToken);
+        if (loadVectorExtension && _vectorMode == SqliteVectorMode.SqliteVec)
         {
-            await connection.ExecuteAsync("""
-                CREATE TABLE IF NOT EXISTS endpoints_vec (
-                  endpoint_id INTEGER PRIMARY KEY REFERENCES endpoints(id) ON DELETE CASCADE,
-                  embedding TEXT NOT NULL
-                );
-                """);
-            return false;
+            _schemaInitializer.LoadVectorExtension(connection);
         }
 
-        try
-        {
-            connection.EnableExtensions(true);
-            connection.LoadExtension(extensionPath);
-            await connection.ExecuteAsync("""
-                CREATE VIRTUAL TABLE IF NOT EXISTS endpoints_vec USING vec0(
-                  endpoint_id INTEGER PRIMARY KEY,
-                  embedding FLOAT[384]
-                );
-                """);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "sqlite-vec extension load failed from path '{ExtensionPath}'; using a compatible local vector table fallback.", extensionPath);
-            await connection.ExecuteAsync("""
-                CREATE TABLE IF NOT EXISTS endpoints_vec (
-                  endpoint_id INTEGER PRIMARY KEY REFERENCES endpoints(id) ON DELETE CASCADE,
-                  embedding TEXT NOT NULL
-                );
-                """);
-            return false;
-        }
-    }
-
-    private static string? ResolveVecExtensionPath()
-    {
-        var configured = Environment.GetEnvironmentVariable("SQLITE_VEC_EXTENSION_PATH");
-        if (!string.IsNullOrWhiteSpace(configured))
-        {
-            return configured;
-        }
-
-        var extension = RuntimeInformation.IsOSPlatform(OSPlatform.OSX)
-            ? ".dylib"
-            : RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
-                ? ".dll"
-                : ".so";
-
-        var candidates = new[]
-        {
-            Path.Combine(AppContext.BaseDirectory, $"vec0{extension}"),
-            Path.Combine(AppContext.BaseDirectory, "runtimes", RuntimeInformation.RuntimeIdentifier, "native", $"vec0{extension}"),
-            Path.Combine(AppContext.BaseDirectory, "native", $"vec0{extension}")
-        };
-
-        foreach (var candidate in candidates)
-        {
-            if (File.Exists(candidate))
-            {
-                return candidate;
-            }
-        }
-
-        return null;
+        return connection;
     }
 
     private static IReadOnlyList<string> DeserializeTags(string json) =>
         JsonSerializer.Deserialize<IReadOnlyList<string>>(json, JsonOptions) ?? [];
-
-    private static float[] DeserializeVector(string json) =>
-        JsonSerializer.Deserialize<float[]>(json, JsonOptions) ?? [];
-
-    private static double CosineSimilarity(float[] left, float[] right)
-    {
-        if (left.Length == 0 || right.Length == 0 || left.Length != right.Length)
-        {
-            return 0;
-        }
-
-        double dot = 0;
-        double leftLength = 0;
-        double rightLength = 0;
-
-        for (var i = 0; i < left.Length; i++)
-        {
-            dot += left[i] * right[i];
-            leftLength += left[i] * left[i];
-            rightLength += right[i] * right[i];
-        }
-
-        return leftLength <= 0 || rightLength <= 0
-            ? 0
-            : dot / (Math.Sqrt(leftLength) * Math.Sqrt(rightLength));
-    }
-
-    private sealed record SearchRow(
-        string ApiName,
-        string Verb,
-        string Path,
-        string? Summary,
-        string TagsJson,
-        string EmbeddingJson);
 }

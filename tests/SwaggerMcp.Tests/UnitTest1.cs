@@ -34,4 +34,35 @@ public class OpenApiChunkerTests
         Assert.Contains("name:string", post.SchemaSummary);
         Assert.Contains("Create a pet", post.EmbeddingText);
     }
+
+    [Fact]
+    public void Chunk_OperationParametersOverridePathParameters()
+    {
+        var chunker = new OpenApiChunker();
+        var fetched = new FetchedSwagger("https://pets.local/swagger.json", """
+            {
+              "openapi": "3.0.1",
+              "info": { "title": "Pets", "version": "v1" },
+              "paths": {
+                "/pets/{id}": {
+                  "parameters": [
+                    { "name": "id", "in": "path", "required": true, "schema": { "type": "string" } }
+                  ],
+                  "get": {
+                    "parameters": [
+                      { "name": "id", "in": "path", "required": true, "schema": { "type": "integer" } }
+                    ],
+                    "responses": { "200": { "description": "OK" } }
+                  }
+                }
+              }
+            }
+            """, "hash");
+
+        var document = chunker.Chunk("pets", fetched);
+        var endpoint = Assert.Single(document.Endpoints);
+
+        Assert.Contains("path.id:integer", endpoint.SchemaSummary);
+        Assert.DoesNotContain("path.id:string", endpoint.SchemaSummary);
+    }
 }

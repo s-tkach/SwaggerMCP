@@ -6,6 +6,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <EmbeddingModelFileName>all-MiniLM-L6-v2.onnx</EmbeddingModelFileName>
+    <EmbeddingModelDir>$(MSBuildProjectDirectory)/../../models</EmbeddingModelDir>
+    <EmbeddingModelPath>$(EmbeddingModelDir)/$(EmbeddingModelFileName)</EmbeddingModelPath>
+    <EmbeddingModelUrl>https://huggingface.co/onnx-models/all-MiniLM-L6-v2-onnx/resolve/main/model.onnx</EmbeddingModelUrl>
+    <EmbeddingModelSha256>994a58868f7abacacbf2192aa0aae8f56da8c4505dbde2740c861b24426ede6b</EmbeddingModelSha256>
   </PropertyGroup>
 
   <ItemGroup>
@@ -23,7 +28,22 @@
 
   <ItemGroup>
     <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="appsettings.example.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="$(EmbeddingModelPath)" Link="models/$(EmbeddingModelFileName)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../models/**/*" LinkBase="models" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+
+  <Target Name="DownloadEmbeddingModel" BeforeTargets="BeforeBuild" Condition="!Exists('$(EmbeddingModelPath)')">
+    <Message Importance="High" Text="Downloading built-in embedding model from $(EmbeddingModelUrl)" />
+    <MakeDir Directories="$(EmbeddingModelDir)" />
+    <DownloadFile SourceUrl="$(EmbeddingModelUrl)" DestinationFolder="$(EmbeddingModelDir)" DestinationFileName="$(EmbeddingModelFileName)" />
+  </Target>
+
+  <Target Name="VerifyEmbeddingModel" BeforeTargets="BeforeBuild" DependsOnTargets="DownloadEmbeddingModel">
+    <GetFileHash Files="$(EmbeddingModelPath)" Algorithm="SHA256">
+      <Output TaskParameter="Items" ItemName="EmbeddingModelHash" />
+    </GetFileHash>
+    <Error Condition="'%(EmbeddingModelHash.FileHash)' != '$(EmbeddingModelSha256)'" Text="Embedding model hash mismatch for $(EmbeddingModelPath). Expected $(EmbeddingModelSha256), got %(EmbeddingModelHash.FileHash)." />
+  </Target>
 
 </Project>
