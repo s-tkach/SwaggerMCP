@@ -69,5 +69,29 @@ public sealed class OpenApiChunkerTests
         Assert.DoesNotContain("path.id:string", endpoint.SchemaSummary);
     }
 
+    [Fact]
+    public void Chunk_PathSignatureCollision_LogsWarningAndContinues()
+    {
+        var chunker = CreateChunker();
+        var fetched = new FetchedSwagger("https://pets.local/swagger.json", """
+            {
+              "openapi": "3.0.1",
+              "info": { "title": "Pets", "version": "v1" },
+              "paths": {
+                "/pets/{petId}": {
+                  "get": { "operationId": "getByPetId", "responses": { "200": { "description": "OK" } } }
+                },
+                "/pets/{id}": {
+                  "get": { "operationId": "getById", "responses": { "200": { "description": "OK" } } }
+                }
+              }
+            }
+            """, "hash");
+
+        var document = chunker.Chunk(fetched);
+
+        Assert.NotEmpty(document.Endpoints);
+    }
+
     private static OpenApiChunker CreateChunker() => new(new SchemaSummarizer(), NullLogger<OpenApiChunker>.Instance);
 }

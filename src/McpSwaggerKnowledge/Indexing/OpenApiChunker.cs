@@ -14,9 +14,21 @@ public sealed class OpenApiChunker(SchemaSummarizer schemaSummarizer, ILogger<Op
         var document = new OpenApiStringReader().Read(swagger.Json, out var diagnostic);
         var apiName = document.Info.Title;
 
-        if (diagnostic.Errors.Count > 0)
+        var pathSignatureErrors = diagnostic.Errors
+            .Where(e => e.Message.Contains("path signature", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        var fatalErrors = diagnostic.Errors.Except(pathSignatureErrors).ToList();
+
+        foreach (var error in pathSignatureErrors)
         {
-            var errors = string.Join("; ", diagnostic.Errors.Select(error => error.Message));
+            logger.LogWarning(
+                "OpenAPI document '{ApiName}' has a path-signature collision (spec violation — some endpoints may be missing from index): {Message}",
+                apiName, error.Message);
+        }
+
+        if (fatalErrors.Count > 0)
+        {
+            var errors = string.Join("; ", fatalErrors.Select(e => e.Message));
             throw new InvalidOperationException($"OpenAPI document '{apiName}' has parse errors: {errors}");
         }
 
